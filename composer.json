@@ -1,0 +1,14 @@
+{
+  "name": "drupal/referenception",
+  "type": "drupal-module",
+  "description": "Provides a field formatter for entity references that allows a list of formatters for target type to be used for entity reference fields.",
+  "keywords": ["Drupal"],
+  "license": "GPL-2.0+",
+  "homepage": "https://www.drupal.org/project/referenception",
+  "minimum-stability": "dev",
+  "support": {
+    "issues": "https://www.drupal.org/project/issues/referenception",
+    "source": "http://cgit.drupalcode.org/referenception"
+  },
+  "require": { }
+}
