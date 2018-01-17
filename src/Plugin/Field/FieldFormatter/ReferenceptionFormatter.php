@@ -324,8 +324,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
   public function settingsForm(array $form, FormStateInterface $form_state) {
     $elements = parent::settingsForm($form, $form_state);
     $field_name = $this->fieldDefinition->getName();
-    $parents = ['fields', $field_name, 'settings_edit_form', 'settings'];
     $wrapper_id = 'referenception-' . str_replace('_', '-', $field_name);
+    $form_state->set('referenceptionFieldDefinition', $this->fieldDefinition);
 
     $elements['#type'] = 'container';
     $elements['#id'] = $wrapper_id;
@@ -344,9 +344,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     ];
 
     $relationship = $form_state->getValue([
-      'fields', $field_name,
-      'settings_edit_form',
-      'settings',
+      'fieldception',
+      $field_name,
       'relationship',
     ]) ?: $this->getSetting('relationship');
     if (!empty($relationship)) {
@@ -372,10 +371,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
       ];
 
       $view_mode = $form_state->getValue([
-        'fields',
+        'fieldception',
         $field_name,
-        'settings_edit_form',
-        'settings',
         'view_mode',
       ]);
       $view_mode = empty($view_mode) && $view_mode !== '' ? $this->getSetting('view_mode') : $view_mode;
@@ -384,7 +381,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
           '#type' => 'select',
           '#title' => $this->t('Field'),
           '#empty_option' => $this->t('- Select -'),
-          '#required' => TRUE,
+          // '#required' => TRUE,
           '#options' => $this->getFieldOptions($relationship),
           '#default_value' => $this->getSetting('field'),
           '#ajax' => [
@@ -396,10 +393,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     }
 
     $field = $form_state->getValue([
-      'fields',
+      'fieldception',
       $field_name,
-      'settings_edit_form',
-      'settings',
       'field',
     ]) ?: $this->getSetting('field');
     if (!empty($field)) {
@@ -408,7 +403,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
         '#type' => 'select',
         '#title' => $this->t('Formatter'),
         '#empty_option' => $this->t('- Select -'),
-        '#required' => TRUE,
+        // '#required' => TRUE,
         '#options' => $this->getFormatterOptions($relationship, $field),
         '#default_value' => $this->getSetting('formatter'),
         '#ajax' => [
@@ -419,10 +414,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     }
 
     $formatter = $form_state->getValue([
-      'fields',
+      'fieldception',
       $field_name,
-      'settings_edit_form',
-      'settings',
       'formatter',
     ]) ?: $this->getSetting('formatter');
     if (!empty($formatter)) {
@@ -438,7 +431,31 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
       }
     }
 
+    $elements['#after_build'][] = [get_class($this), 'afterBuild'];
+    $elements['#element_validate'][] = [get_class($this), 'elementValidate'];
+
     return $elements;
+  }
+
+  public static function elementValidate($element, FormStateInterface $form_state) {
+    $field_name = $form_state->get('referenceptionFieldDefinition')->getName();
+    $form_state->setValue([
+      'fieldception',
+      $field_name,
+    ], $form_state->getValue($element['#parents']));
+  }
+
+  public static function afterBuild($element, FormStateInterface $form_state) {
+    // ksm($form_state->get('referenceptionFieldDefinition')->getName());
+
+    // $field_name = $this->fieldDefinition->getName();
+
+    // ksm($element);
+    return $element;
+  }
+
+  public function getFieldDefinition() {
+    return $this->fieldDefinition;
   }
 
   /**
@@ -696,7 +713,14 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    */
   protected function getData() {
     if (!isset($this->data)) {
-      $this->data = $this->loadData($this->fieldDefinition);
+      $field_definition = $this->fieldDefinition;
+      //   ksm($field_definition);
+      // if ($this->viewMode == '_custom') {
+      //   $entity_type = $field_definition->getTargetEntityTypeId();
+      //   $entity_type_definition = $this->entityTypeManager->getDefinition($entity_type);
+      // }
+      $this->data = $this->loadData($field_definition);
+      // ksm($this->data);
     }
     return $this->data;
   }
@@ -709,17 +733,31 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    *
    * @param \Drupal\Core\Field\FieldDefinitionInterface $field
    *   The field definition.
+   * @param number $level
+   *   The level of nesting.
    *
    * @return array
    *   Field info array.
    */
-  protected function loadData(FieldDefinitionInterface $field) {
+  protected function loadData(FieldDefinitionInterface $field, $level = 0) {
     $return = [];
 
-    if (in_array($field->getType(), ['entity_reference', 'entity_reference_revisions']) && $field->isDisplayConfigurable('view')) {
+    if (in_array($field->getType(), ['entity_reference', 'entity_reference_revisions']) && ($field->isDisplayConfigurable('view') || $level === 0) && $level < 5) {
       $settings = $field->getSettings();
       $entity_type = $settings['target_type'];
-      $bundles = isset($settings['handler_settings']['target_bundles']) ? $settings['handler_settings']['target_bundles'] : [$entity_type];
+      if ($this->viewMode == '_custom' && $level === 0) {
+        $bundles = [];
+        foreach ($this->entityTypeManager->getBundleInfo($entity_type) as $id => $bundle) {
+          $bundles[] = $id;
+        }
+        // $bundles = [$entity_type];
+      }
+      else if (isset($settings['handler_settings']['target_bundles'])) {
+        $bundles = $settings['handler_settings']['target_bundles'];
+      }
+      else {
+        $bundles = [$entity_type];
+      }
 
       $entity_type_object = $this->entityTypeManager->getDefinition($entity_type);
       if ($entity_type_object->isSubclassOf('\Drupal\Core\Entity\FieldableEntityInterface')) {
@@ -736,7 +774,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
             if (!empty($formatters)) {
               $data['fields'][$field_name]['field_definition'] = $field_definition;
               $data['fields'][$field_name]['formatters'] = $formatters;
-              $relationships = $this->loadData($field_definition);
+              $relationships = $this->loadData($field_definition, $level + 1);
               if (!empty($relationships)) {
                 $data['relationships'][$field_name] = $relationships;
               }
