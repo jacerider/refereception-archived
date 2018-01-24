@@ -381,7 +381,6 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
           '#type' => 'select',
           '#title' => $this->t('Field'),
           '#empty_option' => $this->t('- Select -'),
-          // '#required' => TRUE,
           '#options' => $this->getFieldOptions($relationship),
           '#default_value' => $this->getSetting('field'),
           '#ajax' => [
@@ -403,7 +402,6 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
         '#type' => 'select',
         '#title' => $this->t('Formatter'),
         '#empty_option' => $this->t('- Select -'),
-        // '#required' => TRUE,
         '#options' => $this->getFormatterOptions($relationship, $field),
         '#default_value' => $this->getSetting('formatter'),
         '#ajax' => [
@@ -431,12 +429,14 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
       }
     }
 
-    $elements['#after_build'][] = [get_class($this), 'afterBuild'];
     $elements['#element_validate'][] = [get_class($this), 'elementValidate'];
 
     return $elements;
   }
 
+  /**
+   * Validate widget.
+   */
   public static function elementValidate($element, FormStateInterface $form_state) {
     $field_name = $form_state->get('referenceptionFieldDefinition')->getName();
     $form_state->setValue([
@@ -445,15 +445,9 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     ], $form_state->getValue($element['#parents']));
   }
 
-  public static function afterBuild($element, FormStateInterface $form_state) {
-    // ksm($form_state->get('referenceptionFieldDefinition')->getName());
-
-    // $field_name = $this->fieldDefinition->getName();
-
-    // ksm($element);
-    return $element;
-  }
-
+  /**
+   * Provide access to the field definition.
+   */
   public function getFieldDefinition() {
     return $this->fieldDefinition;
   }
@@ -654,7 +648,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    */
   protected function getFlattenedData() {
     $data = $this->getData();
-    return $this->getFlattenedDataRecursive($data);
+    return $this->getFlattenedDataRecursive($data, TRUE);
   }
 
   /**
@@ -662,6 +656,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    *
    * @param array $data
    *   A nested array containing entity_type => bundle => [fields, children].
+   * @param bool $is_root
+   *   If the request should be a root request.
    * @param string $key
    *   A key used to define the flat nesting of references.
    * @param string $label
@@ -672,10 +668,13 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    * @return array
    *   Field info array.
    */
-  protected function getFlattenedDataRecursive(array $data = [], $key = '', $label = '', array $cardinality = []) {
+  protected function getFlattenedDataRecursive(array $data = [], $is_root = FALSE, $key = '', $label = '', array $cardinality = []) {
     $return = [];
     foreach ($data as $entity_type_id => $info) {
       foreach ($info['bundles'] as $bundle_id => $bundle_data) {
+        if ($is_root) {
+          $cardinality = [];
+        }
         $id = $key . $info['field_definition']->getName() . ':' . $entity_type_id . ':' . $bundle_id;
 
         // Build label.
@@ -698,7 +697,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
         }
 
         foreach ($bundle_data['relationships'] as $field_id => $relationship_data) {
-          $return += $this->getFlattenedDataRecursive($relationship_data, $id . '|', $name, $cardinality);
+          $return += $this->getFlattenedDataRecursive($relationship_data, FALSE, $id . '|', $name, $cardinality);
         }
       }
     }
@@ -714,13 +713,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
   protected function getData() {
     if (!isset($this->data)) {
       $field_definition = $this->fieldDefinition;
-      //   ksm($field_definition);
-      // if ($this->viewMode == '_custom') {
-      //   $entity_type = $field_definition->getTargetEntityTypeId();
-      //   $entity_type_definition = $this->entityTypeManager->getDefinition($entity_type);
-      // }
       $this->data = $this->loadData($field_definition);
-      // ksm($this->data);
     }
     return $this->data;
   }
@@ -733,7 +726,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    *
    * @param \Drupal\Core\Field\FieldDefinitionInterface $field
    *   The field definition.
-   * @param number $level
+   * @param int $level
    *   The level of nesting.
    *
    * @return array
@@ -750,9 +743,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
         foreach ($this->entityTypeManager->getBundleInfo($entity_type) as $id => $bundle) {
           $bundles[] = $id;
         }
-        // $bundles = [$entity_type];
       }
-      else if (isset($settings['handler_settings']['target_bundles'])) {
+      elseif (isset($settings['handler_settings']['target_bundles'])) {
         $bundles = $settings['handler_settings']['target_bundles'];
       }
       else {
