@@ -7,10 +7,10 @@ use Drupal\Core\Field\FieldItemListInterface;
 use Drupal\Core\Field\FieldDefinitionInterface;
 use Drupal\Core\Entity\EntityTypeManagerInterface;
 use Drupal\Core\Field\FieldTypePluginManager;
-use Drupal\Core\Entity\EntityDisplayRepositoryInterface;
 use Drupal\Core\Field\FormatterPluginManager;
 use Drupal\Core\Form\FormStateInterface;
 use Drupal\Component\Utility\NestedArray;
+use Drupal\Core\Entity\EntityFieldManagerInterface;
 use Drupal\Core\Plugin\ContainerFactoryPluginInterface;
 use Symfony\Component\DependencyInjection\ContainerInterface;
 
@@ -36,6 +36,13 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
   protected $entityTypeManager;
 
   /**
+   * The entity field manager service.
+   *
+   * @var \Drupal\Core\Entity\EntityFieldManagerInterface
+   */
+  protected $entityFieldManager;
+
+  /**
    * The field type plugin manager.
    *
    * @var \Drupal\Core\Field\FieldTypePluginManager
@@ -48,13 +55,6 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    * @var \Drupal\Core\Field\FormatterPluginManager
    */
   protected $fieldFormatterManager;
-
-  /**
-   * The entity display repository.
-   *
-   * @var \Drupal\Core\Entity\EntityDisplayRepositoryInterface
-   */
-  protected $entityDisplayRepository;
 
   /**
    * An array of available data.
@@ -89,19 +89,19 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    *   Any third party settings settings.
    * @param \Drupal\Core\Entity\EntityTypeManagerInterface $entity_type_manager
    *   The entity manager.
+   * @param \Drupal\Core\Entity\EntityFieldManagerInterface $entity_field_manager
+   *   The entity field manager.
    * @param \Drupal\Core\Field\FieldTypePluginManager $field_type_manager
    *   The formatter type manager.
    * @param \Drupal\Core\Field\FormatterPluginManager $field_formatter_manager
    *   The formatter plugin manager.
-   * @param \Drupal\Core\Entity\EntityDisplayRepositoryInterface $entity_display_repository
-   *   The entity display repository.
    */
-  public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, EntityTypeManagerInterface $entity_type_manager, FieldTypePluginManager $field_type_manager, FormatterPluginManager $field_formatter_manager, EntityDisplayRepositoryInterface $entity_display_repository) {
+  public function __construct($plugin_id, $plugin_definition, FieldDefinitionInterface $field_definition, array $settings, $label, $view_mode, array $third_party_settings, EntityTypeManagerInterface $entity_type_manager, EntityFieldManagerInterface $entity_field_manager, FieldTypePluginManager $field_type_manager, FormatterPluginManager $field_formatter_manager) {
     parent::__construct($plugin_id, $plugin_definition, $field_definition, $settings, $label, $view_mode, $third_party_settings);
     $this->entityTypeManager = $entity_type_manager;
+    $this->entityFieldManager = $entity_field_manager;
     $this->fieldTypeManager = $field_type_manager;
     $this->fieldFormatterManager = $field_formatter_manager;
-    $this->entityDisplayRepository = $entity_display_repository;
   }
 
   /**
@@ -116,10 +116,10 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
       $configuration['label'],
       $configuration['view_mode'],
       $configuration['third_party_settings'],
-      $container->get('entity.manager'),
+      $container->get('entity_type.manager'),
+      $container->get('entity_field.manager'),
       $container->get('plugin.manager.field.field_type'),
-      $container->get('plugin.manager.field.formatter'),
-      $container->get('entity_display.repository')
+      $container->get('plugin.manager.field.formatter')
     );
   }
 
@@ -129,7 +129,6 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
   public static function defaultSettings() {
     return [
       'relationship' => '',
-      'view_mode' => '',
       'field' => '',
       'cardinality' => [],
       'formatter' => '',
@@ -144,28 +143,19 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     $elements = [];
 
     $relationship = $this->getSetting('relationship');
-    $view_mode = $this->getSetting('view_mode');
     $field = $this->getSetting('field');
     $formatter = $this->getSetting('formatter');
     $settings = $this->getSetting('settings');
-    if (!empty($relationship) && (!empty($view_mode) || (!empty($field) && !empty($formatter)))) {
+    if (!empty($relationship) && !empty($field) && !empty($formatter)) {
       $entities = [$items->getEntity()];
       $child_entities = $this->getRelationshipEntity($entities, $this->getSetting('relationship'));
-      if ($view_mode) {
-        foreach ($child_entities as $delta => $child_entity) {
-          $view_builder = $this->entityTypeManager->getViewBuilder($child_entity->getEntityTypeId());
-          $elements[$delta] = $view_builder->view($child_entity, $view_mode, $child_entity->language()->getId());
-        }
-      }
-      else {
-        $formatter_instance = $this->getFormatterInstance($relationship, $field, $formatter, $settings);
-        if (!empty($formatter_instance)) {
-          foreach ($child_entities as $delta => $child_entity) {
-            $value = $child_entity->get($field)->getValue();
-            $child_items = $this->fieldTypeManager->createFieldItemList($child_entity, $field, $value);
-            $formatter_instance->prepareView([$child_items->getEntity()->id() => $child_items]);
-            $elements[$delta] = $formatter_instance->viewElements($child_items, $langcode);
-          }
+      $formatter_instance = $this->getFormatterInstance($relationship, $field, $formatter, $settings);
+      if (!empty($formatter_instance)) {
+        foreach ($child_entities as $child_entity) {
+          $value = $child_entity->get($field)->getValue();
+          $child_items = $this->fieldTypeManager->createFieldItemList($child_entity, $field, $value);
+          $formatter_instance->prepareView([$child_items->getEntity()->id() => $child_items]);
+          $elements[] = $formatter_instance->viewElements($child_items, $langcode);
         }
       }
     }
@@ -262,49 +252,41 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     $summary = [];
 
     $relationship = $this->getSetting('relationship');
-    list($field_name, $entity_type, $bundle) = explode(':', $relationship);
-    $view_mode = $this->getSetting('view_mode');
     $field = $this->getSetting('field');
     $formatter = $this->getSetting('formatter');
     $settings = $this->getSetting('settings');
-    if (!empty($relationship) && (!empty($view_mode) || (!empty($field) && !empty($formatter)))) {
+    if (!empty($relationship) && !empty($field) && !empty($formatter)) {
       // Relationship summary.
       $relationships = $this->getRelationshipOptions();
       if (isset($relationships[$relationship])) {
         $summary[] = $this->t('Relationship: @relationship', [
           '@relationship' => $relationships[$relationship],
         ]);
-        if ($view_mode) {
-          $view_modes = $this->entityDisplayRepository->getViewModeOptions($entity_type);
-          $summary[] = t('Rendered as @mode', ['@mode' => isset($view_modes[$view_mode]) ? $view_modes[$view_mode] : $view_mode]);
-        }
-        else {
-          // Field summary.
-          $fields = $this->getFieldOptions($relationship);
-          if (isset($fields[$field])) {
-            $summary[] = $this->t('Field: @field', [
-              '@field' => $fields[$field],
+        // Field summary.
+        $fields = $this->getFieldOptions($relationship);
+        if (isset($fields[$field])) {
+          $summary[] = $this->t('Field: @field', [
+            '@field' => $fields[$field],
+          ]);
+          // Formatter summary.
+          $formatters = $this->getFormatterOptions($relationship, $field);
+          if (isset($formatters[$formatter])) {
+            $summary[] = $this->t('Formatter: @formatter', [
+              '@formatter' => $formatters[$formatter],
             ]);
-            // Formatter summary.
-            $formatters = $this->getFormatterOptions($relationship, $field);
-            if (isset($formatters[$formatter])) {
-              $summary[] = $this->t('Formatter: @formatter', [
-                '@formatter' => $formatters[$formatter],
-              ]);
-              // Instance summary.
-              $formatter_instance = $this->getFormatterInstance($relationship, $field, $formatter, $settings);
-              if (!empty($formatter_instance)) {
-                $summary = array_merge($summary, $formatter_instance->settingsSummary());
-                // Thanks @grafikchaos!
-              }
-            }
-            else {
-              $summary[] = $this->t('Invalid formatter');
+            // Instance summary.
+            $formatter_instance = $this->getFormatterInstance($relationship, $field, $formatter, $settings);
+            if (!empty($formatter_instance)) {
+              $summary = array_merge($summary, $formatter_instance->settingsSummary());
+              // Thanks @grafikchaos!
             }
           }
           else {
-            $summary[] = $this->t('Invalid field');
+            $summary[] = $this->t('Invalid formatter');
           }
+        }
+        else {
+          $summary[] = $this->t('Invalid field');
         }
       }
       else {
@@ -324,8 +306,8 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
   public function settingsForm(array $form, FormStateInterface $form_state) {
     $elements = parent::settingsForm($form, $form_state);
     $field_name = $this->fieldDefinition->getName();
+    $parents = ['fields', $field_name, 'settings_edit_form', 'settings'];
     $wrapper_id = 'referenception-' . str_replace('_', '-', $field_name);
-    $form_state->set('referenceptionFieldDefinition', $this->fieldDefinition);
 
     $elements['#type'] = 'container';
     $elements['#id'] = $wrapper_id;
@@ -344,8 +326,9 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     ];
 
     $relationship = $form_state->getValue([
-      'fieldception',
-      $field_name,
+      'fields', $field_name,
+      'settings_edit_form',
+      'settings',
       'relationship',
     ]) ?: $this->getSetting('relationship');
     if (!empty($relationship)) {
@@ -358,42 +341,25 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
       ];
       $this->settingsCardinalityForm($elements['cardinality'], $form_state, $relationship);
 
-      list($field_name, $entity_type, $bundle) = explode(':', $relationship);
-      $elements['view_mode'] = [
+      $elements['field'] = [
         '#type' => 'select',
-        '#options' => ['' => 'Individual Field'] + $this->entityDisplayRepository->getViewModeOptions($entity_type),
-        '#title' => t('View mode'),
-        '#default_value' => $this->getSetting('view_mode'),
+        '#title' => $this->t('Field'),
+        '#empty_option' => $this->t('- Select -'),
+        '#required' => TRUE,
+        '#options' => $this->getFieldOptions($relationship),
+        '#default_value' => $this->getSetting('field'),
         '#ajax' => [
           'callback' => [get_class($this), 'settingsFormAjax'],
           'wrapper' => $wrapper_id,
         ],
       ];
-
-      $view_mode = $form_state->getValue([
-        'fieldception',
-        $field_name,
-        'view_mode',
-      ]);
-      $view_mode = empty($view_mode) && $view_mode !== '' ? $this->getSetting('view_mode') : $view_mode;
-      if (!$view_mode) {
-        $elements['field'] = [
-          '#type' => 'select',
-          '#title' => $this->t('Field'),
-          '#empty_option' => $this->t('- Select -'),
-          '#options' => $this->getFieldOptions($relationship),
-          '#default_value' => $this->getSetting('field'),
-          '#ajax' => [
-            'callback' => [get_class($this), 'settingsFormAjax'],
-            'wrapper' => $wrapper_id,
-          ],
-        ];
-      }
     }
 
     $field = $form_state->getValue([
-      'fieldception',
+      'fields',
       $field_name,
+      'settings_edit_form',
+      'settings',
       'field',
     ]) ?: $this->getSetting('field');
     if (!empty($field)) {
@@ -402,6 +368,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
         '#type' => 'select',
         '#title' => $this->t('Formatter'),
         '#empty_option' => $this->t('- Select -'),
+        '#required' => TRUE,
         '#options' => $this->getFormatterOptions($relationship, $field),
         '#default_value' => $this->getSetting('formatter'),
         '#ajax' => [
@@ -412,8 +379,10 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
     }
 
     $formatter = $form_state->getValue([
-      'fieldception',
+      'fields',
       $field_name,
+      'settings_edit_form',
+      'settings',
       'formatter',
     ]) ?: $this->getSetting('formatter');
     if (!empty($formatter)) {
@@ -429,27 +398,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
       }
     }
 
-    $elements['#element_validate'][] = [get_class($this), 'elementValidate'];
-
     return $elements;
-  }
-
-  /**
-   * Validate widget.
-   */
-  public static function elementValidate($element, FormStateInterface $form_state) {
-    $field_name = $form_state->get('referenceptionFieldDefinition')->getName();
-    $form_state->setValue([
-      'fieldception',
-      $field_name,
-    ], $form_state->getValue($element['#parents']));
-  }
-
-  /**
-   * Provide access to the field definition.
-   */
-  public function getFieldDefinition() {
-    return $this->fieldDefinition;
   }
 
   /**
@@ -648,7 +597,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    */
   protected function getFlattenedData() {
     $data = $this->getData();
-    return $this->getFlattenedDataRecursive($data, TRUE);
+    return $this->getFlattenedDataRecursive($data);
   }
 
   /**
@@ -656,25 +605,20 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    *
    * @param array $data
    *   A nested array containing entity_type => bundle => [fields, children].
-   * @param bool $is_root
-   *   If the request should be a root request.
    * @param string $key
    *   A key used to define the flat nesting of references.
    * @param string $label
    *   The label.
-   * @param array $cardinality
+   * @param array $label
    *   The cardinality.
    *
    * @return array
    *   Field info array.
    */
-  protected function getFlattenedDataRecursive(array $data = [], $is_root = FALSE, $key = '', $label = '', array $cardinality = []) {
+  protected function getFlattenedDataRecursive($data = [], $key = '', $label = '', array $cardinality = []) {
     $return = [];
     foreach ($data as $entity_type_id => $info) {
       foreach ($info['bundles'] as $bundle_id => $bundle_data) {
-        if ($is_root) {
-          $cardinality = [];
-        }
         $id = $key . $info['field_definition']->getName() . ':' . $entity_type_id . ':' . $bundle_id;
 
         // Build label.
@@ -697,7 +641,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
         }
 
         foreach ($bundle_data['relationships'] as $field_id => $relationship_data) {
-          $return += $this->getFlattenedDataRecursive($relationship_data, FALSE, $id . '|', $name, $cardinality);
+          $return += $this->getFlattenedDataRecursive($relationship_data, $id . '|', $name, $cardinality);
         }
       }
     }
@@ -712,8 +656,7 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    */
   protected function getData() {
     if (!isset($this->data)) {
-      $field_definition = $this->fieldDefinition;
-      $this->data = $this->loadData($field_definition);
+      $this->data = $this->loadData($this->fieldDefinition);
     }
     return $this->data;
   }
@@ -726,33 +669,20 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
    *
    * @param \Drupal\Core\Field\FieldDefinitionInterface $field
    *   The field definition.
-   * @param int $level
-   *   The level of nesting.
    *
    * @return array
    *   Field info array.
    */
-  protected function loadData(FieldDefinitionInterface $field, $level = 0) {
+  protected function loadData(FieldDefinitionInterface $field) {
     $return = [];
 
-    if (in_array($field->getType(), ['entity_reference', 'entity_reference_revisions']) && ($field->isDisplayConfigurable('view') || $level === 0) && $level < 5) {
+    if (in_array($field->getType(), ['entity_reference', 'entity_reference_revisions']) && $field->isDisplayConfigurable('view')) {
       $settings = $field->getSettings();
       $entity_type = $settings['target_type'];
-      if ($this->viewMode == '_custom' && $level === 0) {
-        $bundles = [];
-        foreach ($this->entityTypeManager->getBundleInfo($entity_type) as $id => $bundle) {
-          $bundles[] = $id;
-        }
-      }
-      elseif (isset($settings['handler_settings']['target_bundles'])) {
-        $bundles = $settings['handler_settings']['target_bundles'];
-      }
-      else {
-        $bundles = [$entity_type];
-      }
+      $bundles = isset($settings['handler_settings']['target_bundles']) ? $settings['handler_settings']['target_bundles'] : [$entity_type];
 
       $entity_type_object = $this->entityTypeManager->getDefinition($entity_type);
-      if ($entity_type_object->isSubclassOf('\Drupal\Core\Entity\FieldableEntityInterface')) {
+      if ($entity_type_object->entityClassImplements('\Drupal\Core\Entity\FieldableEntityInterface')) {
         $return[$entity_type]['entity_definition'] = $entity_type_object;
         $return[$entity_type]['field_definition'] = $field;
         $return[$entity_type]['cardinality'] = $field->getFieldStorageDefinition()->getCardinality();
@@ -760,13 +690,13 @@ class ReferenceptionFormatter extends EntityReferenceRevisionsFormatterBase impl
           $data = [];
           $data['bundle_definition'] = $entity_type_object->getBundleEntityType() ? $this->entityTypeManager->getStorage($entity_type_object->getBundleEntityType())->load($bundle) : NULL;
           $data['relationships'] = [];
-          $fields = $this->entityTypeManager->getFieldDefinitions($entity_type, $bundle);
+          $fields = $this->entityFieldManager->getFieldDefinitions($entity_type, $bundle);
           foreach ($fields as $field_name => $field_definition) {
             $formatters = $this->getFormatters($field_definition->getType());
             if (!empty($formatters)) {
               $data['fields'][$field_name]['field_definition'] = $field_definition;
               $data['fields'][$field_name]['formatters'] = $formatters;
-              $relationships = $this->loadData($field_definition, $level + 1);
+              $relationships = $this->loadData($field_definition);
               if (!empty($relationships)) {
                 $data['relationships'][$field_name] = $relationships;
               }
